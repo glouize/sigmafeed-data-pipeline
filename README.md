@@ -350,9 +350,36 @@ Open it with [DB Browser for SQLite](https://sqlitebrowser.org/) (free GUI tool)
 | `tickers_fail` | INTEGER | Tickers that failed |
 | `notes` | TEXT | Error summary |
 
+---
+
+### Dimensional Star Schema (Kimball Model)
+
+* **`dim_date`**: Calendar dimension with `date_key` (YYYYMMDD), `full_date`, `year`, `quarter`, `month`, `month_name`, `day_of_week`, `day_name`, `is_weekend`, `is_trading_day` (NYSE schedule).
+* **`dim_security`**: Security metadata with `security_key`, `ticker`, `company_name`, `asset_class` (ETF/Equity), `sector`, `exchange`, `currency`.
+* **`dim_macro_indicator`**: Macro series metadata with `indicator_key`, `series_id`, `series_name`, `category`, `frequency`, `units`.
+* **`fact_market_daily`**: Conformed facts linking `date_key` and `security_key` with OHLCV, `daily_return`, `log_return`, rolling volatilities (`hv_21d`, `hv_30d`, `hv_60d`), `iv_atm_30d`, and `vol_risk_premium`.
+
+---
+
+### Quantitative Feature Store View (`v_quant_feature_store`)
+
+A wide, unified analytical view designed for direct consumption by quant backtesters, ML pipelines, and Jupyter notebooks:
+
+* **Price & Returns:** `open`, `high`, `low`, `close`, `volume`, `daily_return`
+* **Volatility Analysis:** `hv_21d`, `hv_30d`, `hv_60d`, `iv_atm_30d`, `vol_risk_premium`
+* **Pivoted Macro Context:** `yield_10y`, `yield_2y`, `yield_spread_10y2y`, `fed_funds_rate`, `cpi_index`
+* **Metadata:** `ticker`, `company_name`, `asset_class`, `sector`, `source`
+
 ### Useful queries
 
 ```sql
+-- Query the Unified Feature Store for SPY
+SELECT date, ticker, close, daily_return, hv_30d, yield_10y, yield_spread_10y2y
+FROM v_quant_feature_store
+WHERE ticker = 'SPY'
+ORDER BY date DESC
+LIMIT 10;
+
 -- Latest close prices for all tickers
 SELECT ticker, date, close, source
 FROM price_history

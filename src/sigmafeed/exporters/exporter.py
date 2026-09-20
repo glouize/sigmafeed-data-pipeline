@@ -1,4 +1,4 @@
-﻿"""
+"""
 exporter.py — Data Export Utilities
 =====================================
 Exports stored market data and analytics from SQLite to CSV files.
@@ -74,7 +74,11 @@ def export_table_to_csv(
     """
     Export an entire table from the SQLite database to CSV.
     """
-    valid_tables = {"price_history", "volatility_history", "macro_data", "pipeline_log"}
+    valid_tables = {
+        "price_history", "volatility_history", "macro_data", "pipeline_log",
+        "dim_date", "dim_security", "dim_macro_indicator", "fact_market_daily",
+        "v_quant_feature_store"
+    }
     if table_name not in valid_tables:
         raise ValueError(f"Invalid table '{table_name}'. Valid options: {valid_tables}")
 
@@ -91,3 +95,36 @@ def export_table_to_csv(
     df.to_csv(out_file, index=False)
     logger.info("Table '%s' (%d rows) exported to %s", table_name, len(df), out_file)
     return out_file
+
+
+def export_feature_store_to_csv(
+    db_path: str,
+    ticker: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> Path:
+    """
+    Export unified quantitative feature store view to CSV.
+    Optionally filters by a single ticker or exports all tickers.
+    """
+    if ticker:
+        default_name = f"{ticker.upper()}_feature_store.csv"
+        query = "SELECT * FROM v_quant_feature_store WHERE ticker = ? ORDER BY date DESC"
+        params = (ticker.upper(),)
+    else:
+        default_name = "all_tickers_feature_store.csv"
+        query = "SELECT * FROM v_quant_feature_store ORDER BY ticker, date DESC"
+        params = ()
+
+    out_file = Path(output_path) if output_path else (Path("exports") / default_name)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(db_path) as conn:
+        df = pd.read_sql_query(query, conn, params=params)
+
+    if df.empty:
+        raise ValueError(f"No records found in v_quant_feature_store (ticker: {ticker})")
+
+    df.to_csv(out_file, index=False)
+    logger.info("Feature store (%d rows) exported to %s", len(df), out_file)
+    return out_file
+

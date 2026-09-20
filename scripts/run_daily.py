@@ -461,6 +461,14 @@ def main() -> int:
     else:
         logger.info("No FRED series configured — skipping macro fetch.")
 
+    # ── Dimensional Model Sync ────────────────────────────────────────────────
+    if not args.dry_run and ok_tickers:
+        try:
+            logger.info("Synchronizing dimensional model (star schema & feature store)...")
+            db.sync_dimensional_model(conn)
+        except Exception as exc:
+            logger.warning("Dimensional sync encountered warning: %s", exc)
+
     # ── Summary ───────────────────────────────────────────────────────────────
     logger.info("-" * 60)
     logger.info(

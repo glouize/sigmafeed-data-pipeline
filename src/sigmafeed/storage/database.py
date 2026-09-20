@@ -79,6 +79,107 @@ CREATE INDEX IF NOT EXISTS idx_vol_ticker_date
 
 CREATE INDEX IF NOT EXISTS idx_macro_series_date
     ON macro_data (series_id, date);
+
+-- ─── DIMENSIONAL STAR SCHEMA ─────────────────────────────────
+
+-- Calendar dimension
+CREATE TABLE IF NOT EXISTS dim_date (
+    date_key        INTEGER PRIMARY KEY, -- YYYYMMDD
+    full_date       DATE UNIQUE NOT NULL,
+    year            INTEGER NOT NULL,
+    quarter         INTEGER NOT NULL,
+    month           INTEGER NOT NULL,
+    month_name      TEXT NOT NULL,
+    day_of_month    INTEGER NOT NULL,
+    day_of_week     INTEGER NOT NULL,    -- 1 = Monday, 7 = Sunday
+    day_name        TEXT NOT NULL,
+    is_weekend      BOOLEAN NOT NULL,
+    is_trading_day  BOOLEAN NOT NULL
+);
+
+-- Security / Ticker dimension
+CREATE TABLE IF NOT EXISTS dim_security (
+    security_key    INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker          TEXT UNIQUE NOT NULL,
+    company_name    TEXT,
+    asset_class     TEXT,                -- 'ETF', 'Equity'
+    sector          TEXT,
+    exchange        TEXT,
+    currency        TEXT DEFAULT 'USD'
+);
+
+-- Macro indicator dimension
+CREATE TABLE IF NOT EXISTS dim_macro_indicator (
+    indicator_key   INTEGER PRIMARY KEY AUTOINCREMENT,
+    series_id       TEXT UNIQUE NOT NULL,
+    series_name     TEXT,
+    category        TEXT,
+    frequency       TEXT,
+    units           TEXT
+);
+
+-- Daily market fact table (conformed OHLCV + volatility metrics)
+CREATE TABLE IF NOT EXISTS fact_market_daily (
+    date_key        INTEGER NOT NULL,
+    security_key    INTEGER NOT NULL,
+    open            REAL,
+    high            REAL,
+    low             REAL,
+    close           REAL,
+    volume          INTEGER,
+    daily_return    REAL,
+    log_return      REAL,
+    iv_atm_30d      REAL,
+    hv_21d          REAL,
+    hv_30d          REAL,
+    hv_60d          REAL,
+    vol_risk_premium REAL,
+    source          TEXT,
+    PRIMARY KEY (date_key, security_key),
+    FOREIGN KEY (date_key) REFERENCES dim_date(date_key),
+    FOREIGN KEY (security_key) REFERENCES dim_security(security_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fact_market_date
+    ON fact_market_daily (date_key);
+
+CREATE INDEX IF NOT EXISTS idx_fact_market_security
+    ON fact_market_daily (security_key);
+
+-- ─── QUANT FEATURE STORE VIEW (DENORMALIZED OBT) ──────────────
+CREATE VIEW IF NOT EXISTS v_quant_feature_store AS
+SELECT 
+    p.date,
+    p.ticker,
+    s.company_name,
+    s.asset_class,
+    s.sector,
+    p.open,
+    p.high,
+    p.low,
+    p.close,
+    p.volume,
+    ROUND((p.close - LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date ASC)) / NULLIF(LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date ASC), 0), 6) AS daily_return,
+    v.hv_21d,
+    v.hv_30d,
+    v.hv_60d,
+    v.iv_atm_30d,
+    ROUND(v.iv_atm_30d - v.hv_30d, 4) AS vol_risk_premium,
+    MAX(CASE WHEN m.series_id = 'DGS10'    THEN m.value END) AS yield_10y,
+    MAX(CASE WHEN m.series_id = 'DGS2'     THEN m.value END) AS yield_2y,
+    MAX(CASE WHEN m.series_id = 'T10Y2Y'   THEN m.value END) AS yield_spread_10y2y,
+    MAX(CASE WHEN m.series_id = 'FEDFUNDS' THEN m.value END) AS fed_funds_rate,
+    MAX(CASE WHEN m.series_id = 'CPIAUCSL' THEN m.value END) AS cpi_index,
+    p.source
+FROM price_history p
+LEFT JOIN volatility_history v 
+    ON p.ticker = v.ticker AND p.date = v.date
+LEFT JOIN dim_security s
+    ON p.ticker = s.ticker
+LEFT JOIN macro_data m 
+    ON p.date = m.date
+GROUP BY p.date, p.ticker
+ORDER BY p.ticker, p.date DESC;
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +212,10 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.executescript(_DDL)
     conn.commit()
     logger.info("Database initialised at %s", db_path)
+    try:
+        sync_dimensional_model(conn)
+    except Exception as exc:
+        logger.debug("Dimensional sync skipped on init: %s", exc)
     return conn
 
 
@@ -409,3 +514,206 @@ def log_run(
     logger.info(
         "Run logged: status=%s ok=%d fail=%d", status, tickers_ok, tickers_fail
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dimensional Modeling & Sync Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+SECURITY_METADATA = {
+    "SPY": {"name": "SPDR S&P 500 ETF Trust", "asset_class": "ETF", "sector": "Broad Market", "exchange": "NYSE Arca"},
+    "QQQ": {"name": "Invesco QQQ Trust", "asset_class": "ETF", "sector": "Technology", "exchange": "NASDAQ"},
+    "AAPL": {"name": "Apple Inc.", "asset_class": "Equity", "sector": "Consumer Electronics", "exchange": "NASDAQ"},
+    "MSFT": {"name": "Microsoft Corporation", "asset_class": "Equity", "sector": "Software & Cloud", "exchange": "NASDAQ"},
+    "NVDA": {"name": "NVIDIA Corporation", "asset_class": "Equity", "sector": "Semiconductors", "exchange": "NASDAQ"},
+    "TSLA": {"name": "Tesla, Inc.", "asset_class": "Equity", "sector": "Automotive & Energy", "exchange": "NASDAQ"},
+    "AMZN": {"name": "Amazon.com, Inc.", "asset_class": "Equity", "sector": "E-Commerce & Cloud", "exchange": "NASDAQ"},
+    "GOOGL": {"name": "Alphabet Inc.", "asset_class": "Equity", "sector": "Internet & Search", "exchange": "NASDAQ"},
+    "META": {"name": "Meta Platforms, Inc.", "asset_class": "Equity", "sector": "Social Media", "exchange": "NASDAQ"},
+    "JPM": {"name": "JPMorgan Chase & Co.", "asset_class": "Equity", "sector": "Financial Services", "exchange": "NYSE"},
+}
+
+MACRO_METADATA = {
+    "DGS10": {"name": "10-Year Treasury Constant Maturity Rate", "category": "Interest Rates", "frequency": "Daily", "units": "Percent"},
+    "DGS2": {"name": "2-Year Treasury Constant Maturity Rate", "category": "Interest Rates", "frequency": "Daily", "units": "Percent"},
+    "T10Y2Y": {"name": "10-Year Treasury Minus 2-Year Treasury Yield Spread", "category": "Interest Rates", "frequency": "Daily", "units": "Percent"},
+    "CPIAUCSL": {"name": "Consumer Price Index for All Urban Consumers: All Items", "category": "Inflation", "frequency": "Monthly", "units": "Index 1982-1984=100"},
+    "FEDFUNDS": {"name": "Federal Funds Effective Rate", "category": "Monetary Policy", "frequency": "Monthly", "units": "Percent"},
+}
+
+
+def populate_dim_security(conn: sqlite3.Connection) -> int:
+    """Populate or update dim_security from known metadata and price_history."""
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT ticker FROM price_history")
+    tickers = [r[0] for r in c.fetchall()]
+
+    rows = []
+    for t in tickers:
+        meta = SECURITY_METADATA.get(t, {
+            "name": f"{t} Security",
+            "asset_class": "Equity",
+            "sector": "General",
+            "exchange": "US",
+        })
+        rows.append((t, meta["name"], meta["asset_class"], meta["sector"], meta["exchange"], "USD"))
+
+    c.executemany(
+        """
+        INSERT OR REPLACE INTO dim_security (ticker, company_name, asset_class, sector, exchange, currency)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    logger.debug("Synchronized %d securities in dim_security", len(rows))
+    return len(rows)
+
+
+def populate_dim_macro_indicator(conn: sqlite3.Connection) -> int:
+    """Populate dim_macro_indicator with known metadata."""
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT series_id FROM macro_data")
+    series_ids = [r[0] for r in c.fetchall()]
+
+    rows = []
+    for sid in series_ids:
+        meta = MACRO_METADATA.get(sid, {
+            "name": f"FRED Series {sid}",
+            "category": "Macroeconomic",
+            "frequency": "Unknown",
+            "units": "Value",
+        })
+        rows.append((sid, meta["name"], meta["category"], meta["frequency"], meta["units"]))
+
+    c.executemany(
+        """
+        INSERT OR REPLACE INTO dim_macro_indicator (series_id, series_name, category, frequency, units)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    logger.debug("Synchronized %d indicators in dim_macro_indicator", len(rows))
+    return len(rows)
+
+
+def populate_dim_date(
+    conn: sqlite3.Connection,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> int:
+    """Populate dim_date calendar dimension across the database date range."""
+    c = conn.cursor()
+    c.execute("SELECT MIN(date), MAX(date) FROM price_history")
+    row = c.fetchone()
+    if not row or not row[0]:
+        return 0
+
+    min_d = _to_date(row[0])
+    max_d = _to_date(row[1])
+
+    start = start_date or (min_d - timedelta(days=30))
+    end = end_date or (max_d + timedelta(days=30))
+
+    nyse = mcal.get_calendar("NYSE")
+    sched = nyse.schedule(start_date=start.isoformat(), end_date=end.isoformat())
+    trading_days = set(sched.index.date)
+
+    curr = start
+    rows = []
+    while curr <= end:
+        d_key = int(curr.strftime("%Y%m%d"))
+        is_wk = curr.isoweekday() >= 6
+        is_td = curr in trading_days
+        rows.append((
+            d_key,
+            curr.isoformat(),
+            curr.year,
+            (curr.month - 1) // 3 + 1,
+            curr.month,
+            curr.strftime("%B"),
+            curr.day,
+            curr.isoweekday(),
+            curr.strftime("%A"),
+            is_wk,
+            is_td,
+        ))
+        curr += timedelta(days=1)
+
+    c.executemany(
+        """
+        INSERT OR REPLACE INTO dim_date
+        (date_key, full_date, year, quarter, month, month_name, day_of_month, day_of_week, day_name, is_weekend, is_trading_day)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    logger.debug("Synchronized %d dates in dim_date", len(rows))
+    return len(rows)
+
+
+def sync_fact_market_daily(conn: sqlite3.Connection) -> int:
+    """
+    Synchronize fact_market_daily by joining price_history and volatility_history
+    against dim_security and dim_date.
+    """
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT OR REPLACE INTO fact_market_daily (
+            date_key,
+            security_key,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            daily_return,
+            log_return,
+            iv_atm_30d,
+            hv_21d,
+            hv_30d,
+            hv_60d,
+            vol_risk_premium,
+            source
+        )
+        SELECT 
+            CAST(strftime('%Y%m%d', p.date) AS INTEGER) AS date_key,
+            s.security_key,
+            p.open,
+            p.high,
+            p.low,
+            p.close,
+            p.volume,
+            ROUND((p.close - LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date ASC)) / NULLIF(LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date ASC), 0), 6) AS daily_return,
+            ROUND(ln(p.close / NULLIF(LAG(p.close) OVER (PARTITION BY p.ticker ORDER BY p.date ASC), 0)), 6) AS log_return,
+            v.iv_atm_30d,
+            v.hv_21d,
+            v.hv_30d,
+            v.hv_60d,
+            ROUND(v.iv_atm_30d - v.hv_30d, 4) AS vol_risk_premium,
+            p.source
+        FROM price_history p
+        JOIN dim_security s ON p.ticker = s.ticker
+        LEFT JOIN volatility_history v ON p.ticker = v.ticker AND p.date = v.date
+        """
+    )
+    conn.commit()
+    count = c.rowcount
+    logger.info("Synchronized %d rows in fact_market_daily", count)
+    return count
+
+
+def sync_dimensional_model(conn: sqlite3.Connection) -> None:
+    """
+    Master sync routine: refreshes all dimensions and conformed facts
+    to ensure the star schema and feature store are up to date.
+    """
+    populate_dim_security(conn)
+    populate_dim_macro_indicator(conn)
+    populate_dim_date(conn)
+    sync_fact_market_daily(conn)
+    logger.info("Dimensional model (star schema & feature store) synchronized.")
+

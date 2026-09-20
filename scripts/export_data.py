@@ -1,4 +1,4 @@
-﻿"""
+"""
 export_data.py — Export CLI Script
 ====================================
 CLI to export market data from SQLite to CSV.
@@ -19,13 +19,18 @@ repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo_root / "src"))
 
 import yaml
-from sigmafeed.exporters.exporter import export_ticker_to_csv, export_table_to_csv
+from sigmafeed.exporters.exporter import (
+    export_ticker_to_csv,
+    export_table_to_csv,
+    export_feature_store_to_csv,
+)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Export SigmaFeed data to CSV.")
     parser.add_argument("--ticker", type=str, help="Ticker to export (e.g. SPY, AAPL)")
-    parser.add_argument("--table", type=str, help="Table name to export (e.g. price_history, macro_data)")
+    parser.add_argument("--table", type=str, help="Table or view name to export (e.g. fact_market_daily, dim_date)")
+    parser.add_argument("--feature-store", action="store_true", help="Export unified quantitative feature store view")
     parser.add_argument("--all-tickers", action="store_true", help="Export all configured tickers to CSV")
     parser.add_argument("--db", default="data/market.db", help="Path to SQLite database")
     parser.add_argument("--out", type=str, help="Custom output CSV file path")
@@ -33,7 +38,11 @@ def main():
 
     args = parser.parse_args()
 
-    if args.ticker:
+    if args.feature_store:
+        out = export_feature_store_to_csv(args.db, args.ticker, args.out)
+        print(f"Exported feature store to {out}")
+
+    elif args.ticker:
         out = export_ticker_to_csv(args.db, args.ticker.upper(), args.out)
         print(f"Exported {args.ticker.upper()} to {out}")
 
