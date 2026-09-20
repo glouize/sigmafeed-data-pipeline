@@ -1,4 +1,4 @@
-# Market Data Pipeline — User Guide
+# SigmaFeed Data Pipeline — User Guide
 
 > **What this does:** Fetches daily OHLCV price data, Historical Volatility (HV), and macroeconomic indicators from Polygon.io, Yahoo Finance, and the Federal Reserve FRED API — and stores everything in a local SQLite database. Designed to run with a single command each day.
 
@@ -38,7 +38,7 @@
 ### Step 1 — Copy the project folder
 
 ```
-amazing-raman/
+sigmafeed-data-pipeline/
 ├── .env.example      ← template for your API keys
 ├── config.yaml       ← tickers and settings
 ├── requirements.txt  ← Python dependencies
@@ -387,7 +387,7 @@ Open `.env` and replace `your_fred_api_key_here` with your real key.
 ### `FileNotFoundError: config.yaml`
 Run the script from the project directory:
 ```bash
-cd path/to/amazing-raman
+cd path/to/sigmafeed-data-pipeline
 python run_daily.py
 ```
 
