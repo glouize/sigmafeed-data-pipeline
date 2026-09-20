@@ -95,11 +95,23 @@ def _polygon_get(
             if resp.status_code == 200:
                 return resp.json()
 
+            if resp.status_code == 401:
+                raise PolygonError(
+                    "Polygon 401 Unauthorized: invalid or inactive API key. "
+                    "Verify POLYGON_API_KEY in your .env file."
+                )
+
             if resp.status_code == 403:
                 # Access denied — retrying won't help (plan restriction).
                 raise PolygonError(
                     f"Polygon 403 Forbidden: your plan does not have access to {url}. "
                     "Upgrade at https://polygon.io/dashboard/subscriptions"
+                )
+
+            if resp.status_code == 404:
+                raise PolygonError(
+                    f"Polygon 404 Not Found: resource not found at {url}. "
+                    "Verify ticker symbol and date range."
                 )
 
             if resp.status_code == 429:
@@ -349,8 +361,13 @@ def fetch_iv_atm(
         day = r.get("day") or {}
         greeks = r.get("greeks") or {}
         iv = r.get("implied_volatility") or greeks.get("implied_volatility")
-        if iv and iv > 0:
-            ivs.append(float(iv))
+        if iv is not None:
+            try:
+                iv_f = float(iv)
+                if iv_f > 0:
+                    ivs.append(iv_f)
+            except (ValueError, TypeError):
+                continue
 
     if not ivs:
         logger.warning(
@@ -399,7 +416,12 @@ def compute_hv(
     if windows is None:
         windows = [21, 30, 60]
 
-    log_ret = ohlcv_df["close"].apply(math.log).diff()
+    import numpy as np  # noqa: PLC0415
+
+    closes = pd.to_numeric(ohlcv_df["close"], errors="coerce")
+    # Guard against zero/negative prices causing math domain error
+    valid_closes = closes.where(closes > 0)
+    log_ret = np.log(valid_closes).diff()
     result = pd.DataFrame(index=ohlcv_df.index)
 
     for w in windows:

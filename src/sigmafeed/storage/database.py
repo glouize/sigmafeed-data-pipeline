@@ -196,7 +196,11 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(path), detect_types=sqlite3.PARSE_DECLTYPES)
+    conn = sqlite3.connect(
+        str(path),
+        timeout=30.0,
+        detect_types=sqlite3.PARSE_DECLTYPES,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
@@ -290,15 +294,15 @@ def upsert_ohlcv(
         for idx, row in df.iterrows()
     ]
 
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO price_history
-            (ticker, date, open, high, low, close, volume, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
+    with conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO price_history
+                (ticker, date, open, high, low, close, volume, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
     logger.debug("[%s] Upserted %d OHLCV rows (source=%s)", ticker, len(rows), source)
     return len(rows)
 
@@ -332,15 +336,15 @@ def upsert_volatility(
         for idx, row in df.iterrows()
     ]
 
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO volatility_history
-            (ticker, date, iv_atm_30d, hv_21d, hv_30d, hv_60d, iv_source)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
+    with conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO volatility_history
+                (ticker, date, iv_atm_30d, hv_21d, hv_30d, hv_60d, iv_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
     logger.debug("[%s] Upserted %d volatility rows", ticker, len(rows))
     return len(rows)
 
@@ -365,14 +369,14 @@ def upsert_macro(
         for idx, row in df.iterrows()
     ]
 
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO macro_data (series_id, date, value)
-        VALUES (?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
+    with conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO macro_data (series_id, date, value)
+            VALUES (?, ?, ?)
+            """,
+            rows,
+        )
     logger.debug("[%s] Upserted %d macro rows", series_id, len(rows))
     return len(rows)
 

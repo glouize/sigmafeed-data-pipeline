@@ -435,85 +435,91 @@ def main() -> int:
         logger.critical("Failed to initialise database: %s", exc)
         return 2
 
-    today = date.today()
-    macro_from = today - timedelta(days=default_history_days)
+    try:
+        today = date.today()
+        macro_from = today - timedelta(days=default_history_days)
 
-    # ── Ticker loop ───────────────────────────────────────────────────────────
-    ok_tickers: list[str] = []
-    fail_tickers: list[str] = []
+        # ── Ticker loop ───────────────────────────────────────────────────────────
+        ok_tickers: list[str] = []
+        fail_tickers: list[str] = []
 
-    for ticker in tickers:
-        from_date, to_date = _resolve_fetch_window(
-            conn, ticker, args.full_reload, default_history_days
-        )
-        success = _process_ticker(conn, ticker, from_date, to_date, cfg, args.dry_run)
-        if success:
-            ok_tickers.append(ticker)
+        for ticker in tickers:
+            from_date, to_date = _resolve_fetch_window(
+                conn, ticker, args.full_reload, default_history_days
+            )
+            success = _process_ticker(conn, ticker, from_date, to_date, cfg, args.dry_run)
+            if success:
+                ok_tickers.append(ticker)
+            else:
+                fail_tickers.append(ticker)
+
+        # ── Macro ─────────────────────────────────────────────────────────────────
+        macro_ok = True
+        if fred_series:
+            macro_ok = _process_macro(
+                conn, fred_series, macro_from, today, cfg, args.dry_run
+            )
         else:
-            fail_tickers.append(ticker)
+            logger.info("No FRED series configured — skipping macro fetch.")
 
-    # ── Macro ─────────────────────────────────────────────────────────────────
-    macro_ok = True
-    if fred_series:
-        macro_ok = _process_macro(
-            conn, fred_series, macro_from, today, cfg, args.dry_run
-        )
-    else:
-        logger.info("No FRED series configured — skipping macro fetch.")
-
-    # ── Dimensional Model Sync ────────────────────────────────────────────────
-    if not args.dry_run and ok_tickers:
-        try:
-            logger.info("Synchronizing dimensional model (star schema & feature store)...")
-            db.sync_dimensional_model(conn)
-        except Exception as exc:
-            logger.warning("Dimensional sync encountered warning: %s", exc)
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    logger.info("-" * 60)
-    logger.info(
-        "Run complete: %d/%d tickers OK | macro: %s",
-        len(ok_tickers),
-        len(tickers),
-        "OK" if macro_ok else "PARTIAL/FAILED",
-    )
-    if fail_tickers:
-        logger.warning("Failed tickers: %s", fail_tickers)
-    logger.info("-" * 60)
-
-    # Export to CSV if requested
-    if args.export_csv and exporter and ok_tickers:
-        logger.info("Exporting updated ticker data to CSV in exports/ ...")
-        for t in ok_tickers:
+        # ── Dimensional Model Sync ────────────────────────────────────────────────
+        if not args.dry_run and ok_tickers:
             try:
-                out = exporter.export_ticker_to_csv(db_path, t)
-                logger.info("[%s] Exported to %s", t, out)
+                logger.info("Synchronizing dimensional model (star schema & feature store)...")
+                db.sync_dimensional_model(conn)
             except Exception as exc:
-                logger.warning("[%s] Failed to export CSV: %s", t, exc)
+                logger.warning("Dimensional sync encountered warning: %s", exc)
 
-    # Determine exit code and status
-    if fail_tickers or not macro_ok:
-        status = "partial"
+        # ── Summary ───────────────────────────────────────────────────────────────
+        logger.info("-" * 60)
+        logger.info(
+            "Run complete: %d/%d tickers OK | macro: %s",
+            len(ok_tickers),
+            len(tickers),
+            "OK" if macro_ok else "PARTIAL/FAILED",
+        )
+        if fail_tickers:
+            logger.warning("Failed tickers: %s", fail_tickers)
+        logger.info("-" * 60)
+
+        # Export to CSV if requested
+        if args.export_csv and exporter and ok_tickers:
+            logger.info("Exporting updated ticker data to CSV in exports/ ...")
+            for t in ok_tickers:
+                try:
+                    out = exporter.export_ticker_to_csv(db_path, t)
+                    logger.info("[%s] Exported to %s", t, out)
+                except Exception as exc:
+                    logger.warning("[%s] Failed to export CSV: %s", t, exc)
+
+        # Determine exit code and status
+        if fail_tickers or not macro_ok:
+            status = "partial"
+            if not args.dry_run:
+                db.log_run(
+                    conn,
+                    status=status,
+                    tickers_ok=len(ok_tickers),
+                    tickers_fail=len(fail_tickers),
+                    notes=f"Failed: {fail_tickers}; macro_ok={macro_ok}",
+                )
+            return 1
+
+        status = "success"
         if not args.dry_run:
             db.log_run(
                 conn,
                 status=status,
                 tickers_ok=len(ok_tickers),
-                tickers_fail=len(fail_tickers),
-                notes=f"Failed: {fail_tickers}; macro_ok={macro_ok}",
+                tickers_fail=0,
+                notes="",
             )
-        return 1
-
-    status = "success"
-    if not args.dry_run:
-        db.log_run(
-            conn,
-            status=status,
-            tickers_ok=len(ok_tickers),
-            tickers_fail=0,
-            notes="",
-        )
-    return 0
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
