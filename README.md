@@ -203,7 +203,7 @@ fred_series:
 ### First run — load full history
 
 ```bash
-python run_daily.py --full-reload
+python scripts/run_daily.py --full-reload
 ```
 
 Fetches 365 days of history for all tickers and FRED series.
@@ -214,7 +214,7 @@ Fetches 365 days of history for all tickers and FRED series.
 ### Daily update — fetch only new data
 
 ```bash
-python run_daily.py
+python scripts/run_daily.py
 ```
 
 Detects the last stored date per ticker and fetches only the delta.
@@ -226,22 +226,22 @@ Detects the last stored date per ticker and fetches only the delta.
 
 ```bash
 # Test everything without writing to the database
-python run_daily.py --dry-run
+python scripts/run_daily.py --dry-run
 
 # Fetch specific tickers only
-python run_daily.py --tickers AAPL MSFT SPY
+python scripts/run_daily.py --tickers AAPL MSFT SPY
 
 # Reload just specific tickers from scratch
-python run_daily.py --full-reload --tickers NVDA AMD
+python scripts/run_daily.py --full-reload --tickers NVDA AMD
 
 # See detailed debug output
-python run_daily.py --verbose
+python scripts/run_daily.py --verbose
 
 # Run daily update and automatically export results to exports/ folder
-python run_daily.py --export-csv
+python scripts/run_daily.py --export-csv
 
 # Combine flags
-python run_daily.py --dry-run --tickers SPY --verbose
+python scripts/run_daily.py --dry-run --tickers SPY --verbose
 
 # Export specific ticker or table to CSV on-demand
 python scripts/export_data.py --ticker SPY
@@ -412,7 +412,7 @@ Open `.env` and replace `your_fred_api_key_here` with your real key.
 Run the script from the project directory:
 ```bash
 cd path/to/sigmafeed-data-pipeline
-python run_daily.py
+python scripts/run_daily.py
 ```
 
 ### `hv_21d` / `hv_30d` / `hv_60d` are NULL for early rows
@@ -420,7 +420,7 @@ Expected — rolling windows need 21/30/60 prior trading days before producing v
 
 ### Gap detected warning persists after rerun
 ```bash
-python run_daily.py --full-reload --tickers AAPL
+python scripts/run_daily.py --full-reload --tickers AAPL
 ```
 
 ---
@@ -437,14 +437,14 @@ Requires **Polygon Starter plan** (~$29/month).
 
 ### Extend history beyond 1 year
 
-Edit `config.yaml`:
+Edit `config/config.yaml`:
 ```yaml
 fetch:
   default_history_days: 1825   # 5 years
 ```
 Then run:
 ```bash
-python run_daily.py --full-reload
+python scripts/run_daily.py --full-reload
 ```
 
 ---
@@ -459,7 +459,7 @@ venv\Scripts\activate         # Windows
 source venv/bin/activate      # macOS/Linux
 
 # 2. Run the update
-python run_daily.py
+python scripts/run_daily.py
 ```
 
 ### What to check
@@ -486,14 +486,17 @@ for tbl in ['price_history','volatility_history','macro_data','pipeline_log']:
 
 ## File Reference
 
-| File | Purpose | Should you edit it? |
+| File / Folder | Purpose | Should you edit it? |
 |---|---|---|
 | `.env` | Your secret API keys | **Yes** — fill in your keys |
 | `.env.example` | Template (safe to commit to git) | No |
-| `config.yaml` | Tickers, FRED series, all settings | **Yes** — freely edit |
+| `config/config.yaml` | Tickers, FRED series, all settings | **Yes** — freely edit |
 | `requirements.txt` | Python package list | No |
-| `data_fetcher.py` | API integration logic | No |
-| `database.py` | SQLite schema and helpers | No |
-| `run_daily.py` | Main runner script | No |
+| `src/sigmafeed/fetchers/` | Data fetching logic (Polygon, yfinance, FRED, HV) | No |
+| `src/sigmafeed/storage/` | SQLite database schema, upsert & cleaning routines | No |
+| `src/sigmafeed/exporters/` | CSV & reporting export logic | No |
+| `scripts/run_daily.py` | Main pipeline runner script | No |
+| `scripts/export_data.py` | Standalone CSV export tool | No |
+| `exports/` | Exported datasets and analytics CSV files | Generated data |
 | `data/market.db` | The database (auto-created) | No |
 | `logs/` | Daily log files (auto-created, 30-day retention) | No |
