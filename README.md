@@ -39,12 +39,28 @@
 
 ```
 sigmafeed-data-pipeline/
-├── .env.example      ← template for your API keys
-├── config.yaml       ← tickers and settings
-├── requirements.txt  ← Python dependencies
-├── data_fetcher.py   ← API integration module
-├── database.py       ← SQLite storage layer
-└── run_daily.py      ← main runner script
+├── config/
+│   └── config.yaml               # Pipeline settings, tickers, FRED series
+├── src/
+│   └── sigmafeed/
+│       ├── fetchers/             # Ingestion & API fetching (Polygon, yfinance, FRED, HV)
+│       │   └── data_fetcher.py
+│       ├── storage/              # Database schema, upserts, gap detection, cleaning
+│       │   └── database.py
+│       └── exporters/            # CSV exporting routines
+│           └── exporter.py
+├── scripts/
+│   ├── run_daily.py              # CLI runner script
+│   └── export_data.py            # On-demand CSV export tool
+├── exports/
+│   └── SPY_market_data.csv       # Sample exported dataset
+├── data/
+│   └── market.db                 # Local SQLite database
+├── logs/                         # Daily rotated execution logs
+├── run_daily.py                  # Root execution entrypoint
+├── requirements.txt              # Python dependencies
+├── .env.example                  # Secrets template
+└── README.md
 ```
 
 ### Step 2 — Create a virtual environment (recommended)
@@ -221,8 +237,16 @@ python run_daily.py --full-reload --tickers NVDA AMD
 # See detailed debug output
 python run_daily.py --verbose
 
+# Run daily update and automatically export results to exports/ folder
+python run_daily.py --export-csv
+
 # Combine flags
 python run_daily.py --dry-run --tickers SPY --verbose
+
+# Export specific ticker or table to CSV on-demand
+python scripts/export_data.py --ticker SPY
+python scripts/export_data.py --table price_history
+python scripts/export_data.py --all-tickers
 ```
 
 ---
