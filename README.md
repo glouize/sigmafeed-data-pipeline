@@ -45,19 +45,20 @@ sigmafeed-data-pipeline/
 │   └── sigmafeed/
 │       ├── fetchers/             # Ingestion & API fetching (Polygon, yfinance, FRED, HV)
 │       │   └── data_fetcher.py
-│       ├── storage/              # Database schema, upserts, gap detection, cleaning
+│       ├── storage/              # Database schema, upserts, star schema, feature store
 │       │   └── database.py
 │       └── exporters/            # CSV exporting routines
 │           └── exporter.py
 ├── scripts/
-│   ├── run_daily.py              # CLI runner script
+│   ├── run_daily.py              # Main CLI runner script
 │   └── export_data.py            # On-demand CSV export tool
 ├── exports/
-│   └── SPY_market_data.csv       # Sample exported dataset
+│   ├── SPY_feature_store.csv     # Sample quantitative feature store dataset
+│   ├── all_tickers_feature_store.csv
+│   └── SPY_market_data.csv
 ├── data/
 │   └── market.db                 # Local SQLite database
 ├── logs/                         # Daily rotated execution logs
-├── run_daily.py                  # Root execution entrypoint
 ├── requirements.txt              # Python dependencies
 ├── .env.example                  # Secrets template
 └── README.md
@@ -243,9 +244,14 @@ python scripts/run_daily.py --export-csv
 # Combine flags
 python scripts/run_daily.py --dry-run --tickers SPY --verbose
 
+# Export unified quantitative feature store view
+python scripts/export_data.py --feature-store
+python scripts/export_data.py --feature-store --ticker SPY
+
 # Export specific ticker or table to CSV on-demand
 python scripts/export_data.py --ticker SPY
-python scripts/export_data.py --table price_history
+python scripts/export_data.py --table fact_market_daily
+python scripts/export_data.py --table dim_date
 python scripts/export_data.py --all-tickers
 ```
 
@@ -503,7 +509,11 @@ python scripts/run_daily.py
 python -c "
 import sqlite3
 conn = sqlite3.connect('data/market.db')
-for tbl in ['price_history','volatility_history','macro_data','pipeline_log']:
+tables = [
+    'price_history', 'volatility_history', 'macro_data', 'pipeline_log',
+    'dim_date', 'dim_security', 'dim_macro_indicator', 'fact_market_daily'
+]
+for tbl in tables:
     n = conn.execute(f'SELECT COUNT(*) FROM {tbl}').fetchone()[0]
     print(f'{tbl:25s}: {n:,} rows')
 "
